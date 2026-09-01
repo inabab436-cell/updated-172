@@ -46,6 +46,8 @@ export interface OrderPricing {
   applied_offers: Array<{ offer_id: string; title: string; discount_amount: number }>;
 }
 
+import { fuzzyPick, matchCatalogLabel } from "./fuzzy-match";
+
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 function norm(v: unknown): string {
@@ -62,10 +64,15 @@ export function unitPriceFor(
   size: string | null,
 ): number {
   const variants = product.variants ?? [];
+  // Resolve the requested colour/size to the catalogue's own wording first, so
+  // a different spelling ("لارج" vs "L") still finds the variant's real price
+  // instead of silently falling back to the base product price.
+  const wantColor = matchCatalogLabel(variants.map((v) => v.color ?? null), color, "color") ?? color;
+  const wantSize = matchCatalogLabel(variants.map((v) => v.size ?? null), size, "size") ?? size;
   const match = variants.find(
     (v) =>
-      (!color || norm(v.color) === norm(color)) &&
-      (!size || norm(v.size) === norm(size)) &&
+      (!wantColor || norm(v.color) === norm(wantColor)) &&
+      (!wantSize || norm(v.size) === norm(wantSize)) &&
       v.price != null,
   );
   const price = match?.price ?? product.price ?? 0;
@@ -87,8 +94,13 @@ export function priceOrderItems(opts: {
   const lines: CartLine[] = [];
 
   for (const it of opts.items ?? []) {
+    // Graded name matching: an exact-string miss used to price the line at 0
+    // and drop it from the offers engine, so the stored order silently
+    // disagreed with the price the customer was quoted.
     const product =
-      opts.products.find((p) => norm(p.name) === norm(it.product_name)) ?? null;
+      opts.products.find((p) => norm(p.name) === norm(it.product_name)) ??
+      fuzzyPick(opts.products, (p) => p.name, it.product_name, { threshold: 0.5 }).match ??
+      null;
     const qty = Number(it.quantity);
     const quantity = Number.isFinite(qty) && qty > 0 ? qty : 1;
     const unit = product ? unitPriceFor(product, it.color ?? null, it.size ?? null) : 0;

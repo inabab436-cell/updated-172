@@ -4,6 +4,7 @@
  * shipping_rates (all keyed by user_id). Uses the admin client server-side; nothing
  * is exposed to the browser except the returned DTOs.
  */
+import { fuzzyPick } from "./fuzzy-match";
 import { createServerFn } from "@tanstack/react-start";
 
 export interface StorefrontProduct {
@@ -282,7 +283,10 @@ export const createStorefrontOrder = createServerFn({ method: "POST" })
     const methods = await loadEnabledPaymentMethods(admin as any, userId);
     const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLocaleLowerCase("ar");
     const rawPayment = (data.payment_method ?? "").trim();
-    const chosenMethod = methods.find((m) => norm(m.name) === norm(rawPayment)) ?? null;
+    const chosenMethod =
+      methods.find((m) => norm(m.name) === norm(rawPayment)) ??
+      fuzzyPick(methods, (m) => m.name, rawPayment, { threshold: 0.6 }).match ??
+      null;
     if (methods.length > 0 && !chosenMethod) throw new Error("طريقة الدفع غير صحيحة.");
 
     // Shipping zone: resolved server-side from published shipping_rates so the

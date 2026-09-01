@@ -9,6 +9,8 @@
  * These helpers are pure so they can be tested without a database.
  */
 
+import { nameMatchScore, stringSimilarity } from "./fuzzy-match";
+
 const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩";
 
 /** Arabic-Indic digits → ASCII. */
@@ -89,15 +91,38 @@ function haystack(input: VerifyOrderIdentityInput): string {
   return normalizeText((input.customerMessages ?? []).filter(Boolean).join(" \n "));
 }
 
+/**
+ * Grounding is checked by CLOSENESS, not by literal containment.
+ *
+ * The old version required every word of the value to appear character for
+ * character in the customer's messages. Ordinary typing (a typo, a different
+ * hamza/ya spelling, an extra title, a rewritten word) therefore looked like
+ * the agent had invented the data, and a complete order was refused at the
+ * last step while the customer had in fact typed everything.
+ */
+function tokenGrounded(token: string, hayTokens: string[]): boolean {
+  if (!token) return false;
+  if (hayTokens.includes(token)) return true;
+  return hayTokens.some(
+    (h) =>
+      (h.length >= 4 && (h.includes(token) || token.includes(h))) ||
+      stringSimilarity(h, token) >= 0.8,
+  );
+}
+
 function nameVerified(input: VerifyOrderIdentityInput, hay: string): boolean {
   if (isDummyText(input.name)) return false;
   const name = normalizeText(input.name);
   const profileName = normalizeText(input.profile?.name ?? "");
-  if (profileName && profileName === name) return true;
+  if (profileName && nameMatchScore(profileName, name) >= 0.7) return true;
   if (name.length >= 2 && hay.includes(name)) return true;
-  // Every word of the name must have been typed by the customer.
+  const hayTokens = hay.split(" ").filter(Boolean);
   const tokens = name.split(" ").filter((t) => t.length >= 2);
-  return tokens.length > 0 && tokens.every((t) => hay.includes(t));
+  if (!tokens.length) return false;
+  const grounded = tokens.filter((t) => tokenGrounded(t, hayTokens)).length;
+  // Most of the name must come from the customer; a single reworded word does
+  // not mean the agent fabricated the name.
+  return grounded / tokens.length >= 0.7;
 }
 
 function phoneVerified(input: VerifyOrderIdentityInput, input_hay: string): boolean {
@@ -113,13 +138,14 @@ function addressVerified(input: VerifyOrderIdentityInput, hay: string): boolean 
   if (isDummyText(input.address)) return false;
   const address = normalizeText(input.address);
   const profileAddress = normalizeText(input.profile?.address ?? "");
-  if (profileAddress && (profileAddress === address || profileAddress.includes(address))) return true;
+  if (profileAddress && nameMatchScore(profileAddress, address) >= 0.7) return true;
   if (hay.includes(address)) return true;
+  const hayTokens = hay.split(" ").filter(Boolean);
   const tokens = Array.from(new Set(address.split(" ").filter((t) => t.length >= 3)));
   if (tokens.length === 0) return false;
-  const found = tokens.filter((t) => hay.includes(t)).length;
+  const found = tokens.filter((t) => tokenGrounded(t, hayTokens)).length;
   // The address must be mostly grounded in what the customer typed.
-  return found / tokens.length >= 0.7;
+  return found / tokens.length >= 0.6;
 }
 
 /**
