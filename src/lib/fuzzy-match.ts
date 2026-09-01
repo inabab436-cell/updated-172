@@ -224,6 +224,40 @@ function sizeKey(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Colour vocabulary: the same colour written in Arabic, in transliterated
+ * Arabic or in English is one colour. This is a synonym dictionary, not a
+ * pattern gate — an unknown colour simply falls through to graded similarity.
+ */
+const COLOR_ALIASES: string[][] = [
+  ["ابيض", "بيضاء", "وايت", "white", "أوف وايت", "اوفوايت", "offwhite"],
+  ["اسود", "سوداء", "بلاك", "black", "كحلي غامق"],
+  ["احمر", "حمراء", "ريد", "red"],
+  ["ازرق", "زرقاء", "بلو", "blue"],
+  ["كحلي", "نيفي", "navy", "ازرق غامق"],
+  ["اخضر", "خضراء", "جرين", "green"],
+  ["اصفر", "صفراء", "يلو", "yellow"],
+  ["رمادي", "جراي", "جري", "grey", "gray", "سيلفر", "فضي", "silver"],
+  ["بيج", "beige", "بيچ", "كريمي", "cream", "كريم"],
+  ["بني", "براون", "brown", "جملي", "كافيه", "coffee"],
+  ["وردي", "بينك", "pink", "روز", "rose", "بمبي"],
+  ["بنفسجي", "موف", "بربل", "purple", "violet"],
+  ["برتقالي", "اورانج", "orange"],
+  ["ذهبي", "جولد", "gold"],
+  ["تركواز", "تيل", "teal", "turquoise", "لبني", "سماوي", "بيبي بلو"],
+  ["زيتي", "زيتوني", "اوليف", "olive"],
+  ["نبيتي", "خمري", "بوردو", "burgundy", "maroon"],
+];
+
+function colorKey(value: unknown): string | null {
+  const c = collapseMatchText(value);
+  if (!c) return null;
+  for (const group of COLOR_ALIASES) {
+    if (group.some((a) => collapseMatchText(a) === c)) return group[0]!;
+  }
+  return null;
+}
+
 export function matchCatalogLabel(
   labels: Array<string | null | undefined>,
   requested: unknown,
@@ -251,6 +285,15 @@ export function matchCatalogLabel(
       if (hit) return hit;
     }
   }
+
+  if (field === "color") {
+    const wantKey = colorKey(requested);
+    if (wantKey) {
+      const hit = list.find((l) => colorKey(l) === wantKey);
+      if (hit) return hit;
+    }
+  }
+
 
   const picked = fuzzyPick(list, (l) => l, requested, {
     threshold: field === "size" ? 0.7 : 0.6,
