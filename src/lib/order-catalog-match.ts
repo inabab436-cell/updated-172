@@ -22,6 +22,8 @@
  * both entry points (chat agent + storefront checkout) share one behaviour.
  */
 
+import { fuzzyPick, matchCatalogLabel } from "./fuzzy-match";
+
 export interface CatalogVariant {
   color?: string | null;
   size?: string | null;
@@ -67,12 +69,26 @@ function pickProduct(
   if (!key) return null;
   const exact = list.find((p) => normKey(p?.name) === key);
   if (exact) return exact;
-  // Fall back to a containment match ("هودي مخطط" ⊂ "ike bras هودي مخطط").
-  const partial = list.filter((p) => {
-    const n = normKey(p?.name);
-    return n.length > 0 && (n.includes(key) || key.includes(n));
+
+  // Graded matching. The previous version returned null as soon as more than
+  // one product matched partially, so the order was stored with the agent's
+  // own wording and the SQL deduction silently found no variant row: the
+  // order existed but stock never moved. Picking the BEST candidate (and, when
+  // two are equally close, the one whose stock can actually serve the line)
+  // keeps the deduction working instead of failing quietly.
+  const picked = fuzzyPick(list, (p) => p?.name, item.product_name, { threshold: 0.5 });
+  if (!picked.match) return null;
+  if (!picked.ambiguous) return picked.match;
+
+  const top = picked.ranked.filter((r) => r.score >= picked.score - 0.06);
+  const serves = top.find((r) => {
+    const variants = (r.item?.variants ?? []).filter(Boolean) as CatalogVariant[];
+    if (!variants.length) return false;
+    const color = matchCatalogLabel(variants.map((v) => v.color ?? null), item.color, "color");
+    const size = matchCatalogLabel(variants.map((v) => v.size ?? null), item.size, "size");
+    return (!item.color || !!color) && (!item.size || !!size);
   });
-  return partial.length === 1 ? partial[0]! : null;
+  return (serves?.item ?? picked.match) as CatalogProduct;
 }
 
 function pickLabel(
@@ -80,16 +96,8 @@ function pickLabel(
   field: "color" | "size",
   requested: unknown,
 ): string | null {
-  const key = normKey(requested);
-  if (!key) return null;
-  const labels = variants
-    .map((v) => (v?.[field] ?? null) as string | null)
-    .filter((l): l is string => typeof l === "string" && l.trim().length > 0);
-  const hit =
-    labels.find((l) => normKey(l) === key) ??
-    labels.find((l) => normKey(l).includes(key) || key.includes(normKey(l))) ??
-    null;
-  return hit ?? null;
+  const labels = variants.map((v) => (v?.[field] ?? null) as string | null);
+  return matchCatalogLabel(labels, requested, field);
 }
 
 /**
