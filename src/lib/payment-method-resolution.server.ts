@@ -37,6 +37,8 @@ export interface ResolvePaymentMethodResult<T extends PaymentMethodLike = Paymen
   source: "exact" | "ai" | "fallback";
 }
 
+import { fuzzyPick, nameMatchScore } from "./fuzzy-match";
+
 const MODEL = "google/gemini-2.5-flash";
 
 function normalize(value: string): string {
@@ -62,18 +64,40 @@ export async function resolvePaymentMethodChoice<T extends PaymentMethodLike>(
   }
 
   const requested = normalize(input.requested ?? "");
-  const exact = methods.find((m) => normalize(m.name) === requested) ?? null;
+  // The graded fallback: which enabled method does the agent's wording mean?
+  // Equality alone used to be the only accepted answer, so "فودافون كاش 💰"
+  // or "instapay" fell through to "the customer never chose a method" and a
+  // finished order was refused at the last step.
+  const exact =
+    methods.find((m) => normalize(m.name) === requested) ??
+    fuzzyPick(methods, (m) => m.name, input.requested, { threshold: 0.6 }).match ??
+    null;
 
-  const conversation = (input.customerMessages ?? [])
+  /**
+   * Did the CUSTOMER themselves express this method? Judged by closeness to
+   * anything they typed, not by a literal keyword list, so it only ever
+   * confirms — it never invents a choice.
+   */
+  const statedByCustomer = (method: T | null, messages: string[]): boolean => {
+    if (!method) return false;
+    return messages.some((m) => nameMatchScore(method.name, m) >= 0.6);
+  };
+
+  const messages = (input.customerMessages ?? [])
     .filter((m): m is string => typeof m === "string" && m.trim().length > 0)
     .slice(0, 60)
-    .reverse()
-    .join("\n");
+    .reverse();
+  const conversation = messages.join("\n");
+  const fallback = (): ResolvePaymentMethodResult<T> => ({
+    method: exact,
+    chosenByCustomer: !!exact && statedByCustomer(exact, messages),
+    source: "fallback",
+  });
 
   const key = input.lovableApiKey;
   const doFetch = input.fetchImpl ?? fetch;
   if (!key || !conversation) {
-    return { method: exact, chosenByCustomer: !!exact, source: "fallback" };
+    return fallback();
   }
 
   const tool = {
@@ -140,21 +164,25 @@ export async function resolvePaymentMethodChoice<T extends PaymentMethodLike>(
       }),
     });
     if (!res.ok) {
-      return { method: exact, chosenByCustomer: !!exact, source: "fallback" };
+      return fallback();
     }
     const json: any = await res.json();
     const argsStr = json?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
     if (!argsStr) {
-      return { method: exact, chosenByCustomer: !!exact, source: "fallback" };
+      return fallback();
     }
     const parsed = JSON.parse(argsStr);
     const idx = Number(parsed?.method_index);
     const stated = parsed?.stated_by_customer === true;
     if (!Number.isInteger(idx) || idx < 0 || idx >= methods.length || !stated) {
+      // The model did not identify a choice. Before blocking the order, accept
+      // a method the customer's own words clearly point at.
+      const grounded = fallback();
+      if (grounded.method && grounded.chosenByCustomer) return grounded;
       return { method: null, chosenByCustomer: false, source: "ai" };
     }
     return { method: methods[idx], chosenByCustomer: true, source: "ai" };
   } catch {
-    return { method: exact, chosenByCustomer: !!exact, source: "fallback" };
+    return fallback();
   }
 }
