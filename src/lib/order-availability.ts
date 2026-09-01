@@ -257,8 +257,21 @@ export function checkSelectionAvailability(
     };
   }
 
-  const wantedColor = norm(selection.color);
-  const wantedSize = norm(selection.size);
+  // Colour / size are resolved to the catalogue's own wording first (aliases,
+  // typos, "لارج" = "L", "وايت" = "أبيض"). Only a colour/size that cannot be
+  // resolved AT ALL is treated as a real request the stock cannot serve.
+  const resolvedColor = matchCatalogLabel(
+    variants.map((v) => v.color),
+    selection.color,
+    "color",
+  );
+  const resolvedSize = matchCatalogLabel(
+    variants.map((v) => v.size),
+    selection.size,
+    "size",
+  );
+  const wantedColor = norm(resolvedColor ?? selection.color);
+  const wantedSize = norm(resolvedSize ?? selection.size);
 
   if (wantedColor) {
     const colorMatches = inStock.filter((v) => norm(v.color) === wantedColor);
@@ -270,7 +283,7 @@ export function checkSelectionAvailability(
         inStockColors,
         inStockSizes,
         message:
-          `اللون «${selection.color}» من «${product.name}» غير متاح حالياً. ` +
+          `اللون «${resolvedColor ?? selection.color}» من «${product.name}» غير متاح حالياً. ` +
           (inStockColors.length
             ? `الألوان المتاحة الآن: ${inStockColors.join("، ")}. `
             : "") +
@@ -291,6 +304,7 @@ export function checkSelectionAvailability(
         .filter((v) => !wantedColor || norm(v.color) === wantedColor)
         .map((v) => String(v.size ?? "")),
     );
+
     return {
       ...base,
       status: "size_unavailable",
