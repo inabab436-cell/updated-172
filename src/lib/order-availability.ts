@@ -195,24 +195,38 @@ export function checkSelectionAvailability(
   const wantedName = norm(selection.product_name);
   if (!wantedName) return base;
 
-  const product =
-    products.find((p) => norm(p.name) === wantedName) ??
-    products.find((p) => norm(p.name).includes(wantedName) || wantedName.includes(norm(p.name))) ??
-    null;
+  // Graded matching (typos, missing/extra words, nicknames, Latin/Arabic
+  // spelling) instead of equality + substring. A wording difference must never
+  // turn a real catalogue product into "not found".
+  const picked = fuzzyPick(products ?? [], (p) => p.name, selection.product_name, {
+    threshold: 0.5,
+  });
+  const product = picked.match ?? null;
 
   if (!product) {
     // A name-matching miss is NOT proof of absence: the selection may carry a
     // typo, a nickname or a shortened word. Never turn it into a denial —
-    // direct the agent to ask the customer what they mean instead.
+    // direct the agent to ask the customer what they mean instead. The wording
+    // below is a pure instruction and deliberately contains no sentence that
+    // could be relayed to the customer as a catalogue/technical statement.
+    const near = picked.ranked
+      .filter((r) => r.score > 0.2)
+      .slice(0, 5)
+      .map((r) => r.item.name)
+      .filter(Boolean);
     return {
       ...base,
       status: "product_not_found",
       message:
-        `الاسم «${selection.product_name}» لم يطابق أي منتج في الكتالوج الحالي. هذا ليس دليلاً على أنه غير متوفر — قد يكون خطأً إملائياً أو اسماً مختصراً أو لقباً يستخدمه العميل. ` +
-        "ممنوع أن تخبر العميل أن المنتج غير موجود أو غير متوفر، وممنوع أن تعرض بديلاً بناءً على هذا اللبس. " +
-        "اسأل العميل سؤال توضيح واحداً فقط لتفهم قصده (مثال: مش فاهم قصد حضرتك، ممكن توضيح أكتر؟) ولا تذكر أي منتج أو سعر أو صورة قبل إجابته.",
+        "لم تتضح بعد أي قطعة من قطع المتجر يقصدها العميل بهذه الصياغة. " +
+        "ممنوع تماماً أن تقول للعميل إن المنتج غير موجود أو غير متوفر أو غير مطابق، وممنوع ذكر أي كلام عن كتالوج أو مطابقة أو نظام. " +
+        (near.length
+          ? `أقرب القطع المتاحة عندك للصياغة دي: ${near.join("، ")}. ` +
+            "لو واحدة منها هي نفس اللي العميل بيتكلم عنها (نفس القطعة بصياغة مختلفة)، اكمل الطلب عليها فوراً بدون أي سؤال إضافي. لو مش واضح أي واحدة منهم، اسأل العميل سؤال واحد بسيط يوضح قصده أو اعرض عليه القطع دي بالاسم كأنك بتساعده يختار. "
+          : "اسأل العميل سؤالاً واحداً بسيطاً يوضح قصده قبل ذكر أي سعر أو صورة. "),
     };
   }
+
 
   const variants = product.variants ?? [];
   // A product with no variant rows is not stock-tracked: it is orderable.
