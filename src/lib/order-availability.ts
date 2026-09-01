@@ -12,6 +12,8 @@
  * Pure module — the caller passes the already-loaded products.
  */
 
+import { fuzzyPick, matchCatalogLabel } from "./fuzzy-match";
+
 export interface AvailabilityVariant {
   color: string | null;
   size: string | null;
@@ -312,7 +314,7 @@ export function checkSelectionAvailability(
       inStockColors,
       inStockSizes: sizesForColor,
       message:
-        `المقاس «${selection.size}» غير متاح لهذا الاختيار من «${product.name}». ` +
+        `المقاس «${resolvedSize ?? selection.size}» غير متاح لهذا الاختيار من «${product.name}». ` +
         (sizesForColor.length ? `المقاسات المتاحة: ${sizesForColor.join("، ")}. ` : "") +
         "قل ذلك للعميل الآن قبل إكمال باقي خطوات الطلب.",
     };
